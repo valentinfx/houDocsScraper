@@ -8,7 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
-logging.basicConfig(level='INFO', format='[%(levelname)s] - %(message)s')
+logging.basicConfig(level="INFO", format="[%(levelname)s] - %(message)s")
 log = logging.getLogger(__name__)
 
 START_URL = "http://127.0.0.1:48626/hom/hou/index.html"
@@ -37,13 +37,13 @@ class DocumentationScraper:
     def get_filename_from_url(self, url):
         """Convert URL to a valid filename"""
         # Remove query parameters and fragments
-        url = url.split('?')[0].split('#')[0]
+        url = url.split("?")[0].split("#")[0]
         
         # Get the last part of the URL path
-        log.info(f"URL: {url}")
+        log.debug(f"URL: {url}")
 
         filename = url.replace(self.base_url, "")
-        filename = filename.replace('/', '_')
+        filename = filename.replace("/", "_")
 
         # If filename is empty (URL ends with /), use the domain name
         if not filename:
@@ -53,33 +53,76 @@ class DocumentationScraper:
         filename = re.sub(r'[\\/*?:"<>|]', '_', filename)
         
         # If filename doesn't end with .html, add it
-        if not filename.endswith('.html'):
-            filename += '.html'
+        if not filename.endswith(".html"):
+            filename += ".html"
 
         # Remove leading underscores
-        filename = filename.lstrip('_')
+        filename = filename.lstrip("_")
 
-        log.info(f"Filename: {filename}")
+        log.debug(f"Filename: {filename}")
             
         return filename
+
+    def process_html_content(self, url, html_content):
+        """
+        Process HTML content to:
+        1. Replace documentation links with local file paths
+        2. Remove non-documentation links
+        """
+        soup = BeautifulSoup(html_content, "html.parser")
+        
+        # Process all anchor tags
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            absolute_url = urljoin(url, href)
+            
+            # Handle fragments (anchors within the same page)
+            if "#" in absolute_url:
+                base_url = absolute_url.split("#")[0]
+                fragment = absolute_url.split("#")[1]
+                
+                # If base URL is a doc page, replace with local link + fragment
+                if self.is_documentation_page(base_url):
+                    local_filename = self.get_filename_from_url(base_url)
+                    a_tag["href"] = f"{local_filename}#{fragment}"
+                # If it"s a fragment in the current page, keep it as is
+                elif base_url == url:
+                    a_tag["href"] = f"#{fragment}"
+                # Otherwise, remove the link but keep the text
+                else:
+                    a_tag.replace_with(a_tag.text)
+            # Handle regular links
+            else:
+                # If it's a documentation page we've visited, replace with local path
+                if self.is_documentation_page(absolute_url):
+                    local_filename = self.get_filename_from_url(absolute_url)
+                    a_tag["href"] = local_filename
+                # Otherwise, remove the link but keep the text
+                else:
+                    a_tag.replace_with(a_tag.text)
+        
+        return str(soup)
     
     def save_content(self, url, content):
         """Save the content to a file"""
+        # Process the HTML content to handle links
+        processed_content = self.process_html_content(url, content)
+        
         filename = self.get_filename_from_url(url)
         file_path = os.path.join(self.output_dir, filename)
 
         if os.path.exists(file_path):
             log.warning(f"File already exists: {file_path}")
         
-        with open(file_path, 'w', encoding='utf-8') as file:
-            file.write(content)
+        with open(file_path, "w", encoding="utf-8") as file:
+            file.write(processed_content)
             
         log.info(f"Saved: {url} -> {file_path}")
     
     def get_page_content(self, url):
         """Fetch and return page content"""
         try:
-            response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Documentation Scraper)'})
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (Documentation Scraper)"})
             response.raise_for_status()  # Raise exception for 4XX/5XX responses
             return response.text
         except requests.RequestException as e:
@@ -88,55 +131,26 @@ class DocumentationScraper:
     
     def extract_links(self, url, html_content):
         """Extract links from the HTML content that are part of the documentation"""
-        soup = BeautifulSoup(html_content, 'html.parser')
+        soup = BeautifulSoup(html_content, "html.parser")
         links = []
         
-        for a_tag in soup.find_all('a', href=True):
-            href = a_tag['href']
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
             absolute_url = urljoin(url, href)
             
             # Only follow links to the same domain and avoid external links
-            if absolute_url.startswith(self.base_url) and '#' not in absolute_url:
+            if absolute_url.startswith(self.base_url) and "#" not in absolute_url:
                 links.append(absolute_url)
                 
         return links
     
-    def is_documentation_page(self, url, html_content):
+    def is_documentation_page(self, url):
         """
         Determine if the page is part of the documentation.
         This is a basic implementation that you might need to customize.
         """
         # Check URL pattern (modify this based on the documentation structure)
-        if not url.startswith(START_URL.replace('index.html', '')):
-            return False
-            
-        # You might want to check for specific elements that identify documentation pages
-        # For example, check if the page has a specific class or ID that all documentation pages have
-        soup = BeautifulSoup(html_content, 'html.parser')
-        
-        # Example: Check if the page has a class that indicates it's documentation
-        # Modify this based on the actual structure of the documentation
-        doc_indicators = ['documentation', 'docs', 'manual', 'reference', 'guide']
-        
-        # Check page title
-        title = soup.title.string.lower() if soup.title else ""
-        if any(indicator in title for indicator in doc_indicators):
-            return True
-            
-        # Check body classes
-        body = soup.body
-        if body and body.get('class'):
-            body_classes = ' '.join(body['class']).lower()
-            if any(indicator in body_classes for indicator in doc_indicators):
-                return True
-                
-        # Check for common documentation elements
-        if soup.find(id='documentation') or soup.find(class_='documentation'):
-            return True
-            
-        # Default to True if we can't determine (you might want to change this)
-        # Alternatively, you could check for specific content patterns
-        return True
+        return False if not url.startswith(START_URL.replace("index.html", "")) else True
     
     def scrape(self, max_pages=None):
         """
@@ -168,7 +182,7 @@ class DocumentationScraper:
                 continue
                 
             # Check if it's a documentation page
-            if self.is_documentation_page(current_url, html_content):
+            if self.is_documentation_page(current_url):
                 log.info("Start")
                 # Save the content
                 self.save_content(current_url, html_content)
@@ -183,7 +197,7 @@ class DocumentationScraper:
                         self.to_visit.append(link)
                 
                 log.info("End")
-                print('\n')
+                print("\n")
             
             # Respect the delay between requests
             time.sleep(self.delay)
